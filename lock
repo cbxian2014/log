@@ -1,0 +1,34 @@
+## 背景
+openstack中在创建卷或者VM时候，会更新租户对应的Quota；更新quota的时候会使用到数据库行锁，在并发场景下，这个锁存在瓶颈点，200并发耗时7秒（Dsware Driver存在类似的问题）
+
+## 现状分析
+为了保证数据的一致性，openstack采用如下逻辑进行实现（先查询，再更新，用锁进行保护，伪代码进行说明）：
+```
+With Lock(row)
+    // 获取租户对应的quota
+    in_use = db.get_quota(tanent_id)  // 对应SQL: select in_use from quota where t_id=XX
+    if in_use == MAX_QUOTA
+        //已到上限值，返回失败
+        return false
+    // 更新quota
+    db.update_quota(tanent_id, in_use+1) //对应SQL：update quota set in_use=XX WHERE t_id=XX
+```
+上述伪代码逻辑上没问题，但在并发的时候，会存在耗时长的问题; 由于openstack采用的是协程（当有IO操作的时候，会让出CPU），假如当get_quota执行的时候，让出CPU，存在以下2点导致耗时：
+* （1）不知道什么时候还可以抢到CPU
+* （2）别的协程在执行到此处即使拿到CPU，也会等待这个行级锁
+
+
+## 解决方案
+核心思想：不查询，直接更新，更新时带上条件，依赖数据库原子操作能力解决并发冲突
+
+伪代码如下：
+
+```
+result = db.quota_increase(tanent_id, MAX_QUOTA) 
+//对应SQL： update quota set in_use=in_use + 1 where in_use < MAX_QUOTA and t_id=XX
+
+if result.row_count == 0
+    // 更新失败
+    return failed
+return sucess
+```
