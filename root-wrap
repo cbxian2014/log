@@ -1,0 +1,28 @@
+## 什么是rootwrap机制
+rootwrap 主要用来做权限控制。在openstack中，非 root 用户想执行需要 root 权限相关的命令时，用 rootwrap 来控制。
+https://wiki.openstack.org/wiki/Rootwrap
+## 问题背景
+当前nova-compute在创建虚拟机的时候采用rootwrap方式，多次（30次左右）调用系统命令，每次调用平均耗时100ms，总耗时2-3秒，耗时较长。
+实际环境中对命令进行测试：
+可以看到通过 nova-rootwrap封装后，耗时变长
+
+
+耗时分析：调用命令时，会经过nova-rootwrap命令进行封装，这个命令在每次允许过程中，都会加载命令白名单（允许nova组件执行命令的列表配置文件），最终再调用实际命令运行。
+
+## 解决方案
+
+
+1、关闭rootwrap机制，直接采用sudo命令执行
+* 说明：这种方案，权限控制需要自行控制，需要自行将nova-compute所使用到的命令加入到openstack用户对应的sudoers配置文件中
+* 收益：平均耗时30ms
+* 配置项：
+
+
+（2）	采用rootwrap_daemon方式：启动一个rootwrap daemon专门接受执行命令的请求，节省每次加载白名单的时间
+* 说明：nova-compute会启动一个daemon进程，在重启nova-compute需要考虑到这个进程的生命周期
+* 收益：平均耗时10ms
+* 配置项：
+
+http://docs.openstack.org/admin-guide/compute-root-wrap-reference.html
+
+
